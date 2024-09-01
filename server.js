@@ -1,35 +1,48 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const { taskQueue } = require('./queue');
-const rateLimit = require('express-rate-limit');
+const Redis = require('ioredis');
+const Bull = require('bull');
 
+// Initialize Express app
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = 3000;
 
+// Middleware
 app.use(bodyParser.json());
 
-// Rate limiter middleware
-const rateLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 20, // limit each IP to 20 requests per windowMs
-  message: 'Too many requests from this IP, please try again later.'
-});
+// Initialize Redis and Bull queue
+const redis = new Redis(); // Defaults to localhost:6379
+const taskQueue = new Bull('task-queue', { redis: { host: '127.0.0.1', port: 6379 } });
 
-app.use('/task', rateLimiter);
-
+// Route to handle task submission
 app.post('/task', async (req, res) => {
+  const userId = req.body.user_id;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'user_id is required' });
+  }
+
   try {
-    const { user_id } = req.body;
-    if (!user_id) {
-      return res.status(400).send('user_id is required');
-    }
-    await taskQueue.add({ user_id });
-    res.status(200).send('Task accepted');
+    // Add task to the queue
+    await taskQueue.add({ userId });
+
+    res.status(200).json({ message: 'Task queued successfully' });
   } catch (error) {
-    res.status(500).send('An error occurred');
+    console.error('Error adding task to queue:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Process tasks from the queue
+taskQueue.process(async (job) => {
+  const { userId } = job.data;
+  
+  // Log task completion
+  console.log(`${userId} - task completed at ${Date.now()}`);
+  // Here you can add logic to write to a log file if needed
+});
+
+// Start the server
+app.listen(port, () => {
+  console.log(`Server is running on http://localhost:${port}`);
 });
